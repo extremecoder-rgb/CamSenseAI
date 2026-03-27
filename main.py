@@ -21,6 +21,7 @@ from src.detector import YOLODetector
 from src.tracker import create_tracker
 from src.utils import FPSCounter, VideoFrameExtractor, JSONLogger
 from src.appliance_status import ApplianceStatusRecognizer
+from src.intensity_calibrator import IntensityCalibrator, create_calibrator
 
 
 def load_config():
@@ -381,6 +382,110 @@ def cmd_benchmark(args, config):
     return 0
 
 
+def cmd_calibrate(args, config):
+    """Run intensity calibration for a room."""
+    calibrator = create_calibrator(config)
+    config_path = Path(__file__).parent / "config.yaml"
+
+    if args.status:
+        print("=== Intensity Calibration Status ===\n")
+        rooms = calibrator.get_all_rooms()
+        if not rooms:
+            print("No rooms configured. Run calibration first.")
+            return 0
+
+        for room_id, calib in rooms.items():
+            is_day = calibrator.is_daytime()
+            dark_th, medium_th = calib.get_thresholds(is_day)
+            print(f"Room: {room_id}")
+            print(f"  Last calibrated: {calib.last_calibrated or 'Never'}")
+            print(f"  Sample count: {calib.sample_count}")
+            print(f"  Day thresholds: dark={calib.day_dark_threshold}, medium={calib.day_medium_threshold}")
+            print(f"  Night thresholds: dark={calib.night_dark_threshold}, medium={calib.night_medium_threshold}")
+
+            warnings = calibrator.validate_thresholds(room_id)
+            if warnings:
+                print(f"  Warnings: {', '.join(warnings)}")
+            print()
+        return 0
+
+    if args.update:
+        room_id = args.room or "default"
+        calibrator.update_thresholds(
+            room_id=room_id,
+            day_dark=args.day_dark,
+            day_medium=args.day_medium,
+            night_dark=args.night_dark,
+            night_medium=args.night_medium
+        )
+        calibrator.save_to_config(config_path)
+        print(f"Updated thresholds for room '{room_id}'")
+        calib = calibrator.get_calibration(room_id)
+        if calib:
+            print(f"  Day: dark={calib.day_dark_threshold}, medium={calib.day_medium_threshold}")
+            print(f"  Night: dark={calib.night_dark_threshold}, medium={calib.night_medium_threshold}")
+        return 0
+
+    if args.input:
+        room_id = args.room or "default"
+        print(f"Running auto-calibration for room '{room_id}'...")
+        print(f"Input: {args.input}")
+
+        extractor = VideoFrameExtractor(args.input)
+        if not extractor.open():
+            print(f"Error: Could not open video source: {args.input}")
+            return 1
+
+        sample_frames = config.get("intensity_calibration", {}).get("auto_calibrate", {}).get("sample_frames", 30)
+        frames_to_sample = args.samples or sample_frames
+
+        print(f"Collecting {frames_to_sample} frames...")
+        frames = []
+        frame_idx = 0
+
+        while frame_idx < frames_to_sample:
+            frame = extractor.read_frame()
+            if frame is None:
+                break
+            frames.append(frame)
+            frame_idx += 1
+
+            if frame_idx % 10 == 0:
+                print(f"  Collected {frame_idx}/{frames_to_sample} frames...")
+
+        extractor.release()
+
+        if len(frames) < 10:
+            print(f"Error: Not enough frames collected ({len(frames)}). Need at least 10.")
+            return 1
+
+        sensitivity = args.sensitivity or config.get("intensity_calibration", {}).get("auto_calibrate", {}).get("sensitivity", 1.0)
+
+        print("Running auto-calibration algorithm...")
+        calib = calibrator.auto_calibrate(
+            room_id=room_id,
+            empty_frames=frames,
+            occupied_frames=None,
+            sensitivity=sensitivity
+        )
+
+        calibrator.save_to_config(config_path)
+
+        print(f"\nCalibration complete for room '{room_id}'!")
+        print(f"  Day thresholds: dark={calib.day_dark_threshold}, medium={calib.day_medium_threshold}")
+        print(f"  Night thresholds: dark={calib.night_dark_threshold}, medium={calib.night_medium_threshold}")
+        print(f"  Samples used: {calib.sample_count}")
+
+        brightnesses = [calibrator.calculate_brightness(f) for f in frames[:10]]
+        avg_brightness = sum(brightnesses) / len(brightnesses)
+        print(f"  Average brightness (sample): {avg_brightness:.1f}")
+        print(f"\nConfig saved to: {config_path}")
+        return 0
+
+    print("Use --input to run calibration, --status to view current settings, or --update to modify thresholds")
+    return 0
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -413,6 +518,20 @@ Examples:
     # benchmark command
     benchmark_parser = subparsers.add_parser("benchmark", help="Run benchmark on test clips")
     benchmark_parser.set_defaults(func=cmd_benchmark)
+    
+    # calibrate command
+    calibrate_parser = subparsers.add_parser("calibrate", help="Intensity calibration for rooms")
+    calibrate_parser.add_argument("input", nargs="?", help="Input video for calibration (optional)")
+    calibrate_parser.add_argument("-r", "--room", help="Room ID for calibration")
+    calibrate_parser.add_argument("-s", "--samples", type=int, help="Number of frames to sample")
+    calibrate_parser.add_argument("--sensitivity", type=float, help="Calibration sensitivity (0.5-1.5)")
+    calibrate_parser.add_argument("--status", action="store_true", help="Show current calibration status")
+    calibrate_parser.add_argument("--update", action="store_true", help="Update thresholds manually")
+    calibrate_parser.add_argument("--day-dark", type=int, help="Day dark threshold (0-255)")
+    calibrate_parser.add_argument("--day-medium", type=int, help="Day medium threshold (0-255)")
+    calibrate_parser.add_argument("--night-dark", type=int, help="Night dark threshold (0-255)")
+    calibrate_parser.add_argument("--night-medium", type=int, help="Night medium threshold (0-255)")
+    calibrate_parser.set_defaults(func=cmd_calibrate)
     
     args = parser.parse_args()
     

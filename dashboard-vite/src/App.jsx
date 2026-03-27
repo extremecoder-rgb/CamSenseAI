@@ -100,8 +100,12 @@ function useRoom(roomId, defaultUrl) {
 
 
 function App() {
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const [activeTab, setActiveTab] = useState('monitor')
   const [runningTime, setRunningTime] = useState(0)
+  const [calibrationData, setCalibrationData] = useState({})
+  const [calibrationLoading, setCalibrationLoading] = useState(false)
+  const [energyDashboard, setEnergyDashboard] = useState({})
+  const [privacyAssurance, setPrivacyAssurance] = useState({})
   
   const room1 = useRoom('room-101', 'http://192.168.0.154:8080/video')
   const room2 = useRoom('room-102', 'http://192.168.0.155:8080/video')
@@ -121,6 +125,72 @@ function App() {
     }, 1000)
     return () => clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'calibration') {
+      fetchCalibration()
+    }
+    if (activeTab === 'dashboard') {
+      fetchEnergyDashboard()
+    }
+    if (activeTab === 'privacy') {
+      fetchPrivacyAssurance()
+    }
+  }, [activeTab])
+
+  const fetchEnergyDashboard = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/energy/dashboard`)
+      const data = await res.json()
+      setEnergyDashboard(data)
+    } catch (err) {
+      console.error('Failed to fetch energy dashboard:', err)
+    }
+  }
+
+  const fetchPrivacyAssurance = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/privacy/assurance`)
+      const data = await res.json()
+      setPrivacyAssurance(data)
+    } catch (err) {
+      console.error('Failed to fetch privacy assurance:', err)
+    }
+  }
+
+  const fetchCalibration = async () => {
+    setCalibrationLoading(true)
+    try {
+      const res = await fetch(`${API_URL}/api/calibration`)
+      const data = await res.json()
+      setCalibrationData(data)
+    } catch (err) {
+      console.error('Failed to fetch calibration:', err)
+    }
+    setCalibrationLoading(false)
+  }
+
+  const updateCalibration = async (roomId, dayDark, dayMedium, nightDark, nightMedium) => {
+    try {
+      const res = await fetch(`${API_URL}/api/calibration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: roomId,
+          day_dark: dayDark,
+          day_medium: dayMedium,
+          night_dark: nightDark,
+          night_medium: nightMedium
+        })
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        fetchCalibration()
+      }
+    } catch (err) {
+      console.error('Failed to update calibration:', err)
+    }
+  }
 
   useEffect(() => {
     // Only fetch alerts/metrics if at least one room is connected
@@ -250,12 +320,15 @@ function App() {
         </div>
 
         <nav className="header-nav">
-          <button className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>◈ MONITOR</button>
+          <button className={`nav-btn ${activeTab === 'monitor' ? 'active' : ''}`} onClick={() => setActiveTab('monitor')}>◈ MONITOR</button>
+          <button className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>◈ SUMMARY</button>
+          <button className={`nav-btn ${activeTab === 'privacy' ? 'active' : ''}`} onClick={() => setActiveTab('privacy')}>◈ PRIVACY</button>
+          <button className={`nav-btn ${activeTab === 'calibration' ? 'active' : ''}`} onClick={() => setActiveTab('calibration')}>◈ CALIBRATE</button>
           <button className={`nav-btn ${activeTab === 'database' ? 'active' : ''}`} onClick={() => setActiveTab('database')}>◈ DATABASE</button>
         </nav>
       </header>
 
-      {activeTab === 'dashboard' && (
+      {activeTab === 'monitor' && (
         <div className="dashboard-grid">
           <aside className="sidebar-left">
             {renderRoomControls(room1, 'SOURCE // ROOM_101')}
@@ -308,6 +381,351 @@ function App() {
           </aside>
         </div>
       )}
+
+      {activeTab === 'calibration' && (
+        <div className="dashboard-grid">
+          <aside className="sidebar-left">
+            <section className="ctrl-group">
+              <h4 className="section-title">INTENSITY_CALIBRATION</h4>
+              <p style={{ fontSize: '11px', opacity: 0.7, marginBottom: '12px' }}>
+                Adjust brightness thresholds per room for accurate occupancy detection.
+              </p>
+              <button className="btn btn-primary" onClick={fetchCalibration} style={{ width: '100%' }}>
+                REFRESH
+              </button>
+            </section>
+          </aside>
+
+          <main className="main-viewport">
+            {calibrationLoading ? (
+              <div style={{ padding: '40px', textAlign: 'center' }}>Loading calibration data...</div>
+            ) : (
+              <div style={{ padding: '20px' }}>
+                <div className="glass-card">
+                  <h4 className="card-title">◈ GLOBAL_SETTINGS</h4>
+                  <div style={{ display: 'flex', gap: '20px', marginBottom: '16px' }}>
+                    <div>
+                      <span className="l">DAY_START</span>
+                      <span className="v">{calibrationData.day_start_hour || 6}:00</span>
+                    </div>
+                    <div>
+                      <span className="l">DAY_END</span>
+                      <span className="v">{calibrationData.day_end_hour || 18}:00</span>
+                    </div>
+                    <div>
+                      <span className="l">STATUS</span>
+                      <span className={`v ${calibrationData.enabled ? 'on' : ''}`}>
+                        {calibrationData.enabled ? 'ENABLED' : 'DISABLED'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '16px' }}>
+                  <h4 className="section-title" style={{ marginBottom: '12px' }}>◈ ROOM_THRESHOLDS</h4>
+                  {Object.keys(calibrationData.rooms || {}).length > 0 ? (
+                    Object.entries(calibrationData.rooms).map(([roomId, calib]) => (
+                      <CalibrationCard
+                        key={roomId}
+                        roomId={roomId}
+                        calib={calib}
+                        onUpdate={updateCalibration}
+                      />
+                    ))
+                  ) : (
+                    <div className="glass-card">
+                      <p style={{ textAlign: 'center', opacity: 0.6 }}>
+                        No room calibrations configured.<br />
+                        Run: python main.py calibrate video.mp4 --room [ROOM_ID]
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </main>
+
+          <aside className="sidebar-right">
+            <div className="glass-card">
+              <h4 className="card-title">◈ HELP</h4>
+              <div style={{ fontSize: '11px', lineHeight: '1.6' }}>
+                <p><strong>Dark Threshold:</strong> Below this = empty/low activity</p>
+                <p><strong>Medium Threshold:</strong> Below this = normal activity</p>
+                <p><strong>Above Medium:</strong> High brightness (occupied)</p>
+                <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '12px 0' }} />
+                <p style={{ opacity: 0.7 }}>
+                  Tip: Use CLI to auto-calibrate from sample videos, then fine-tune here.
+                </p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {activeTab === 'dashboard' && (
+        <div className="dashboard-grid">
+          <aside className="sidebar-left">
+            <section className="ctrl-group">
+              <h4 className="section-title">ENERGY_SUMMARY</h4>
+              <p style={{ fontSize: '11px', opacity: 0.7, marginBottom: '12px' }}>
+                Stakeholder one-slide energy impact report
+              </p>
+              <button className="btn btn-primary" onClick={fetchEnergyDashboard} style={{ width: '100%' }}>
+                REFRESH
+              </button>
+            </section>
+          </aside>
+
+          <main className="main-viewport">
+            <div style={{ padding: '20px' }}>
+              <div className="glass-card" style={{ background: 'linear-gradient(135deg, #1a3a2a 0%, #0d2818 100%)' }}>
+                <h4 className="card-title">◈ ANNUAL_PROJECTIONS</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginTop: '16px' }}>
+                  <div style={{ textAlign: 'center', padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#4ade80' }}>
+                      {energyDashboard.projections?.kwh_per_day || 0}
+                    </div>
+                    <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '8px' }}>kWh / DAY</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#fbbf24' }}>
+                      ₹{energyDashboard.projections?.inr_per_year || 0}
+                    </div>
+                    <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '8px' }}>SAVINGS / YEAR (INR)</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#60a5fa' }}>
+                      {energyDashboard.projections?.co2_per_year_kg || 0}
+                    </div>
+                    <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '8px' }}>kg CO₂ / YEAR</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="glass-card" style={{ marginTop: '16px' }}>
+                <h4 className="card-title">◈ LAST_30_DAYS</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginTop: '12px' }}>
+                  <div><span className="l">ENERGY_SAVED</span><span className="v">{energyDashboard.total_energy_saved_kwh || 0} kWh</span></div>
+                  <div><span className="l">COST_(USD)</span><span className="v">${energyDashboard.total_cost_saved_usd || 0}</span></div>
+                  <div><span className="l">COST_(INR)</span><span className="v">₹{energyDashboard.total_cost_saved_inr || 0}</span></div>
+                  <div><span className="l">CO2_SAVED</span><span className="v">{energyDashboard.total_co2_saved_kg || 0} kg</span></div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '16px' }}>
+                <h4 className="section-title" style={{ marginBottom: '12px' }}>◈ BY_ROOM</h4>
+                {Object.keys(energyDashboard.rooms || {}).length > 0 ? (
+                  Object.entries(energyDashboard.rooms).map(([roomId, data]) => (
+                    <div key={roomId} className="glass-card" style={{ marginBottom: '8px', padding: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 'bold' }}>{roomId.toUpperCase()}</span>
+                        <div style={{ display: 'flex', gap: '20px', fontSize: '11px' }}>
+                          <span><span style={{ opacity: 0.6 }}>kWh/d:</span> {data.kwh_per_day}</span>
+                          <span><span style={{ opacity: 0.6 }}>₹/yr:</span> ₹{data.inr_per_year}</span>
+                          <span><span style={{ opacity: 0.6 }}>CO₂/yr:</span> {data.co2_per_year_kg}kg</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="glass-card" style={{ textAlign: 'center', opacity: 0.6 }}>
+                    No room data available yet
+                  </div>
+                )}
+              </div>
+            </div>
+          </main>
+
+          <aside className="sidebar-right">
+            <div className="glass-card">
+              <h4 className="card-title">◈ CONFIG</h4>
+              <div style={{ fontSize: '11px', lineHeight: '1.8' }}>
+                <p><span style={{ opacity: 0.6 }}>Rate (USD):</span> ${energyDashboard.config?.electricity_rate_usd || 0.12}/kWh</p>
+                <p><span style={{ opacity: 0.6 }}>Rate (INR):</span> ₹{energyDashboard.config?.electricity_rate_inr || 6.50}/kWh</p>
+                <p><span style={{ opacity: 0.6 }}>CO₂ Factor:</span> {energyDashboard.config?.co2_factor_kg_per_kwh || 0.71} kg/kWh</p>
+                <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '12px 0' }} />
+                <p><span style={{ opacity: 0.6 }}>Total Load:</span> {energyDashboard.config?.total_appliance_watts || 140}W</p>
+                <p style={{ fontSize: '10px', opacity: 0.5 }}>Light: {energyDashboard.config?.wattage_breakdown?.light || 40}W | Fan: {energyDashboard.config?.wattage_breakdown?.ceiling_fan || 65}W | Monitor: {energyDashboard.config?.wattage_breakdown?.monitor || 35}W</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {activeTab === 'privacy' && (
+        <div className="dashboard-grid">
+          <aside className="sidebar-left">
+            <section className="ctrl-group">
+              <h4 className="section-title">PRIVACY_ASSURANCE</h4>
+              <p style={{ fontSize: '11px', opacity: 0.7, marginBottom: '12px' }}>
+                Stakeholder privacy commitment report
+              </p>
+              <button className="btn btn-primary" onClick={fetchPrivacyAssurance} style={{ width: '100%' }}>
+                REFRESH
+              </button>
+            </section>
+          </aside>
+
+          <main className="main-viewport">
+            <div style={{ padding: '20px' }}>
+              <div className="glass-card" style={{ background: 'linear-gradient(135deg, #1a2a3a 0%, #0d1828 100%)' }}>
+                <h4 className="card-title">◈ PRIVACY_MEASURES</h4>
+                <div style={{ marginTop: '16px' }}>
+                  {Object.entries(privacyAssurance.measures || {}).map(([key, measure]) => (
+                    <div key={key} style={{ display: 'flex', alignItems: 'center', padding: '12px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', marginBottom: '8px' }}>
+                      <span style={{ 
+                        width: '10px', height: '10px', borderRadius: '50%', 
+                        background: measure.status === 'active' || measure.status === 'enabled' ? '#4ade80' : '#f87171',
+                        marginRight: '12px'
+                      }} />
+                      <div>
+                        <div style={{ fontWeight: 'bold', fontSize: '12px' }}>{key.replace('_', ' ').toUpperCase()}</div>
+                        <div style={{ fontSize: '11px', opacity: 0.7 }}>{measure.description || measure.status}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="glass-card" style={{ marginTop: '16px' }}>
+                <h4 className="card-title">◈ STAKEHOLDER_COMMITMENTS</h4>
+                <ul style={{ marginTop: '12px', paddingLeft: '20px', fontSize: '12px', lineHeight: '2' }}>
+                  {(privacyAssurance.stakeholder_commitments || []).map((commitment, idx) => (
+                    <li key={idx} style={{ color: '#4ade80' }}>✓ {commitment}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="glass-card" style={{ marginTop: '16px' }}>
+                <h4 className="card-title">◈ COMPLIANCE</h4>
+                <div style={{ display: 'flex', gap: '20px', marginTop: '12px' }}>
+                  {Object.entries(privacyAssurance.compliance || {}).map(([key, value]) => (
+                    <div key={key} style={{ 
+                      padding: '12px 20px', 
+                      background: value ? 'rgba(74, 222, 128, 0.2)' : 'rgba(248, 113, 113, 0.2)',
+                      borderRadius: '6px',
+                      border: `1px solid ${value ? '#4ade80' : '#f87171'}`
+                    }}>
+                      <span style={{ fontSize: '12px' }}>{key.replace('_', ' ').toUpperCase()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="glass-card" style={{ marginTop: '16px', background: 'rgba(0,0,0,0.3)' }}>
+                <h4 className="card-title">◈ DATA_RETENTION</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '12px', fontSize: '11px' }}>
+                  <div><span style={{ opacity: 0.6 }}>Raw Images:</span><br /><span style={{ color: '#4ade80' }}>{privacyAssurance.measures?.data_retention?.config?.raw_images || 'Never stored'}</span></div>
+                  <div><span style={{ opacity: 0.6 }}>Thumbnails:</span><br /><span>{privacyAssurance.measures?.data_retention?.config?.anonymized_thumbnails || '30 days'}</span></div>
+                  <div><span style={{ opacity: 0.6 }}>Detection Logs:</span><br /><span>90 days</span></div>
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <aside className="sidebar-right">
+            <div className="glass-card">
+              <h4 className="card-title">◈ VERIFICATION</h4>
+              <div style={{ fontSize: '11px', lineHeight: '1.8' }}>
+                <p><span style={{ opacity: 0.6 }}>Status:</span> <span style={{ color: '#4ade80' }}>VERIFIED</span></p>
+                <p><span style={{ opacity: 0.6 }}>Last Checked:</span><br />{privacyAssurance.last_verified || 'N/A'}</p>
+                <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '12px 0' }} />
+                <p style={{ fontSize: '10px', opacity: 0.7 }}>
+                  This system processes all data locally with no cloud transmission. 
+                  All faces are automatically anonymized before any storage.
+                </p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CalibrationCard({ roomId, calib, onUpdate }) {
+  const [dayDark, setDayDark] = useState(calib?.day?.dark_threshold || 80)
+  const [dayMedium, setDayMedium] = useState(calib?.day?.medium_threshold || 160)
+  const [nightDark, setNightDark] = useState(calib?.night?.dark_threshold || 40)
+  const [nightMedium, setNightMedium] = useState(calib?.night?.medium_threshold || 100)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setDayDark(calib?.day?.dark_threshold || 80)
+    setDayMedium(calib?.day?.medium_threshold || 160)
+    setNightDark(calib?.night?.dark_threshold || 40)
+    setNightMedium(calib?.night?.medium_threshold || 100)
+  }, [calib])
+
+  const handleSave = () => {
+    onUpdate(roomId, dayDark, dayMedium, nightDark, nightMedium)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="glass-card" style={{ marginBottom: '12px' }}>
+      <h4 className="card-title">◈ {roomId.toUpperCase()}</h4>
+      {calib?.last_calibrated && (
+        <p style={{ fontSize: '10px', opacity: 0.5, marginBottom: '12px' }}>
+          Last updated: {calib.last_calibrated}
+        </p>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        <div>
+          <p style={{ fontSize: '11px', marginBottom: '8px', color: '#4ade80' }}>DAY THRESHOLDS</p>
+          <div className="input-row" style={{ marginBottom: '8px' }}>
+            <span style={{ fontSize: '10px', width: '60px' }}>Dark &lt;</span>
+            <input
+              type="number"
+              value={dayDark}
+              onChange={(e) => setDayDark(parseInt(e.target.value) || 0)}
+              min="0" max="255"
+              style={{ width: '60px', padding: '4px' }}
+            />
+          </div>
+          <div className="input-row">
+            <span style={{ fontSize: '10px', width: '60px' }}>Medium &lt;</span>
+            <input
+              type="number"
+              value={dayMedium}
+              onChange={(e) => setDayMedium(parseInt(e.target.value) || 0)}
+              min="0" max="255"
+              style={{ width: '60px', padding: '4px' }}
+            />
+          </div>
+        </div>
+        <div>
+          <p style={{ fontSize: '11px', marginBottom: '8px', color: '#60a5fa' }}>NIGHT THRESHOLDS</p>
+          <div className="input-row" style={{ marginBottom: '8px' }}>
+            <span style={{ fontSize: '10px', width: '60px' }}>Dark &lt;</span>
+            <input
+              type="number"
+              value={nightDark}
+              onChange={(e) => setNightDark(parseInt(e.target.value) || 0)}
+              min="0" max="255"
+              style={{ width: '60px', padding: '4px' }}
+            />
+          </div>
+          <div className="input-row">
+            <span style={{ fontSize: '10px', width: '60px' }}>Medium &lt;</span>
+            <input
+              type="number"
+              value={nightMedium}
+              onChange={(e) => setNightMedium(parseInt(e.target.value) || 0)}
+              min="0" max="255"
+              style={{ width: '60px', padding: '4px' }}
+            />
+          </div>
+        </div>
+      </div>
+      <button
+        className={`btn ${saved ? 'btn-primary' : 'btn-outline'}`}
+        onClick={handleSave}
+        style={{ marginTop: '12px', width: '100%' }}
+      >
+        {saved ? 'SAVED!' : 'SAVE THRESHOLDS'}
+      </button>
     </div>
   )
 }

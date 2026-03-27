@@ -1,32 +1,29 @@
 """
 Low-light preprocessing for improved detection in dark environments.
+Supports intensity calibration for room-specific brightness thresholds.
 """
 
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional, Any
 
 
-# Brightness threshold for low-light detection
 LOW_LIGHT_THRESHOLD = 50
 
 
-def detect_low_light(frame: np.ndarray) -> Tuple[bool, float]:
+def detect_low_light(frame: np.ndarray, threshold: float = LOW_LIGHT_THRESHOLD) -> Tuple[bool, float]:
     """
     Detect if frame is low-light.
     
     Args:
         frame: Video frame (BGR format from OpenCV)
+        threshold: Custom brightness threshold (optional)
         
     Returns:
         Tuple of (is_low_light, brightness_score)
     """
-    # Convert to grayscale for brightness calculation
     gray = np.mean(frame, axis=2)
-    
-    # Calculate mean brightness (0-255)
     brightness = np.mean(gray)
-    
-    is_low_light = brightness < LOW_LIGHT_THRESHOLD
+    is_low_light = brightness < threshold
     
     return is_low_light, float(brightness)
 
@@ -73,12 +70,24 @@ def enhance_frame_fallback(frame: np.ndarray) -> np.ndarray:
 
 
 class LowLightDetector:
-    """Track low-light conditions over time."""
+    """Track low-light conditions over time with optional calibration support."""
     
-    def __init__(self, threshold: float = LOW_LIGHT_THRESHOLD):
+    def __init__(
+        self,
+        threshold: float = LOW_LIGHT_THRESHOLD,
+        calibrator: Optional[Any] = None,
+        room_id: str = "default"
+    ):
         self.threshold = threshold
+        self.calibrator = calibrator
+        self.room_id = room_id
         self.low_light_count = 0
         self.total_frames = 0
+    
+    def set_calibrator(self, calibrator: Any, room_id: str = "default") -> None:
+        """Set intensity calibrator for room-specific thresholds."""
+        self.calibrator = calibrator
+        self.room_id = room_id
     
     def process(self, frame: np.ndarray) -> Tuple[bool, float, bool]:
         """
@@ -91,16 +100,27 @@ class LowLightDetector:
             Tuple of (is_low_light, brightness, should_enhance)
         """
         self.total_frames += 1
-        
-        is_low_light, brightness = detect_low_light(frame)
+
+        if self.calibrator:
+            brightness = self.calibrator.calculate_brightness(frame)
+            is_daytime = self.calibrator.is_daytime()
+            level = self.calibrator.classify_brightness(brightness, self.room_id, is_daytime)
+            is_low_light = level == "dark"
+        else:
+            is_low_light, brightness = detect_low_light(frame, self.threshold)
         
         if is_low_light:
             self.low_light_count += 1
         
-        # Enhance if low-light
         should_enhance = is_low_light
         
         return is_low_light, brightness, should_enhance
+    
+    def get_intensity_info(self, frame: np.ndarray) -> dict:
+        """Get detailed intensity information if calibrator is set."""
+        if self.calibrator:
+            return self.calibrator.get_occupancy_indicator(frame, self.room_id)
+        return {}
     
     def get_stats(self) -> dict:
         """Get low-light statistics."""
