@@ -58,6 +58,12 @@ appliance:
   enabled: true
   # Process every N frames for appliance detection (less frequent than person detection)
   frame_skip: 20  # Reduced frequency to save CPU/Network
+  # Real appliance wattage values (in watts)
+  wattage:
+    light: 40      # Actual LED bulb wattage
+    ceiling_fan: 65 # Actual fan wattage
+  # Electricity rate ($/kWh)
+  electricity_rate: 0.12
   # Roboflow API settings
   roboflow:
     api_key: "p3oHA7T2HAO4pgy61Vae"
@@ -74,8 +80,8 @@ privacy:
   blur_method: "pixelate"
   # Blur level: kernel size for gaussian
   blur_level: 99
-  # Pixelate blocks: number of blocks (lower = more pixelated)
-  pixelate_blocks: 4
+  # Pixelate blocks: number of blocks (higher = more pixelated, more privacy)
+  pixelate_blocks: 12
   # Face detection fallback: estimate from person bbox if no Haar cascade
   use_person_bbox_fallback: true
   # Performance: skip face detection every N frames
@@ -91,8 +97,18 @@ privacy:
 # Alert settings for waste detection
 alerts:
   enabled: true
-  initial_delay_seconds: 300
-  repeat_interval_seconds: 3600
+  initial_delay_seconds: 60    # 1 minutes before first alert
+  repeat_interval_seconds: 600 # 10 minutes between follow-up alerts
+  twilio:
+    enabled: true
+    account_sid: "AC9ee2cfc333ceea9617b6706deae49150"
+    auth_token: "4e524d2f461ea5bc29a3d2cc42f4629c"
+    from_number: "+14782802045"
+    to_number: "+916290642933"
+    whatsapp:
+      enabled: true
+      from_number: "whatsapp:+14155238886" # Twilio sandbox number
+      content_sid: "HXb5b62575e6e4ff6129ad7c8efe1f983e"
   storage:
     enabled: true
     events_file: "output/waste_events.json"

@@ -199,6 +199,19 @@ class MultiRoomDetector:
             os.makedirs(self._raw_dir, exist_ok=True)
         if self._save_anon:
             os.makedirs(self._anon_dir, exist_ok=True)
+        
+        # Alert manager
+        alert_config = config.get("alerts", {})
+        if alert_config.get("enabled", True):
+            try:
+                from src.alert_manager import create_alert_manager
+                self.alert_manager = create_alert_manager(config)
+                print(f"Alert manager loaded: {self.alert_manager.get_config()}")
+            except Exception as e:
+                print(f"Warning: Could not load alert manager: {e}")
+                self.alert_manager = None
+        else:
+            self.alert_manager = None
 
     def start_background_processing(self):
         """Start the background appliance detection thread."""
@@ -306,9 +319,9 @@ class MultiRoomDetector:
             try:
                 from src.privacy_filter import PrivacyFilter
                 self.privacy_filter = PrivacyFilter(
-                    blur_method=privacy_config.get("blur_method", "solid"),
+                    blur_method=privacy_config.get("blur_method", "pixelate"),
                     blur_level=privacy_config.get("blur_level", 99),
-                    pixelate_blocks=privacy_config.get("pixelate_blocks", 4),
+                    pixelate_blocks=privacy_config.get("pixelate_blocks", 12),
                     skip_frames=privacy_config.get("skip_frames", 3)
                 )
                 self.privacy_enabled = True
@@ -588,6 +601,116 @@ async def get_privacy_status():
     }
 
 
+@app.get("/api/alerts/events")
+async def get_alert_events(limit: int = 10):
+    """Get recent waste alert events."""
+    if not app_state["detector"] or not app_state["detector"].alert_manager:
+        return {"events": [], "count": 0}
+    
+    events = app_state["detector"].alert_manager.get_recent_events(limit)
+    print(f"[API] /alerts/events returning {len(events)} events")
+    return {
+        "events": [
+            {
+                "event_id": e.event_id,
+                "room_id": e.room_id,
+                "room_name": e.room_name,
+                "timestamp": e.timestamp,
+                "duration_seconds": e.duration_seconds,
+                "light_status": e.light_status,
+                "fan_status": e.fan_status,
+                "thumbnail_path": e.thumbnail_path
+            }
+            for e in events
+        ],
+        "count": len(events)
+    }
+
+
+@app.get("/api/alerts/status")
+async def get_alerts_status():
+    """Get alert system status and room waste durations."""
+    if not app_state["detector"]:
+        return {"enabled": False, "rooms": {}}
+    
+    alert_mgr = app_state["detector"].alert_manager
+    if not alert_mgr:
+        return {"enabled": False, "rooms": {}}
+    
+    rooms = {}
+    for room_id, room in app_state["detector"]._rooms.items():
+        duration = alert_mgr.get_waste_duration(room_id)
+        rooms[room_id] = {
+            "room_name": room.room_name,
+            "status": room.status,
+            "waste_duration_seconds": duration,
+            "light_status": room.light_status,
+            "fan_status": room.fan_status
+        }
+    
+    return {
+        "enabled": alert_mgr.enabled,
+        "initial_delay": alert_mgr.initial_delay,
+        "repeat_interval": alert_mgr.repeat_interval,
+        "rooms": rooms
+    }
+
+
+@app.get("/api/energy/metrics")
+async def get_energy_metrics():
+    """Get real-time energy metrics from actual detection data."""
+    if not app_state["detector"]:
+        return {"error": "Detector not initialized"}
+    
+    config = app_state["config"]
+    appliance_config = config.get("appliance", {})
+    wattage = appliance_config.get("wattage", {})
+    electricity_rate = appliance_config.get("electricity_rate", 0.12)
+    
+    # Get current room state
+    detector = app_state["detector"]
+    rooms_data = {}
+    
+    for room_id, room in detector._rooms.items():
+        # Calculate wattage based on actual appliance status
+        light_watts = wattage.get("light", 40) if room.light_status == "ON" else 0
+        fan_watts = wattage.get("ceiling_fan", 65) if room.fan_status == "ON" else 0
+        estimated_watts = light_watts + fan_watts
+        
+        # Calculate cost per hour
+        cost_per_hour = (estimated_watts / 1000) * electricity_rate
+        
+        # Get waste duration from alert manager
+        waste_duration = 0
+        if detector.alert_manager:
+            waste_duration = detector.alert_manager.get_waste_duration(room_id)
+        
+        # Calculate cumulative waste (in hours)
+        waste_hours = waste_duration / 3600
+        cumulative_cost = cost_per_hour * waste_hours
+        
+        rooms_data[room_id] = {
+            "room_name": room.room_name,
+            "person_count": room.person_count,
+            "light_status": room.light_status,
+            "fan_status": room.fan_status,
+            "light_watts": light_watts,
+            "fan_watts": fan_watts,
+            "estimated_watts": estimated_watts,
+            "cost_per_hour": round(cost_per_hour, 4),
+            "waste_duration_seconds": round(waste_duration, 1),
+            "cumulative_waste_hours": round(waste_hours, 4),
+            "cumulative_cost": round(cumulative_cost, 4),
+            "potential_savings_per_hour": round(cost_per_hour, 4) if room.status == "waste" else 0
+        }
+    
+    return {
+        "electricity_rate": electricity_rate,
+        "wattage_config": wattage,
+        "rooms": rooms_data
+    }
+
+
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
     """WebSocket endpoint for real-time video streaming."""
@@ -708,6 +831,21 @@ async def websocket_stream(websocket: WebSocket):
                     )
                 except Exception as e:
                     pass
+            
+            # Check for alert AFTER privacy filter (so we have anonymized frame)
+            if detector and detector.alert_manager:
+                room = detector._rooms.get("room-101")
+                if room and room.status == "waste":
+                    alert_event = detector.alert_manager.check_room(
+                        room_id=room.room_id,
+                        room_name=room.room_name,
+                        person_count=person_count,
+                        light_status=room.light_status,
+                        fan_status=room.fan_status,
+                        anonymized_frame=anonymized_frame
+                    )
+                    if alert_event:
+                        print(f"[ALERT] Waste detected in {room.room_name} for {alert_event.duration_seconds:.0f}s")
 
             # Resize for display - smaller for faster transmission
             h, w = frame.shape[:2]

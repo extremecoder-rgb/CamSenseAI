@@ -104,6 +104,25 @@ class PrivacyFilter:
         solid = cv2.GaussianBlur(solid, (31, 31), 0)
         return solid
     
+    def _apply_pixelate(self, face_roi: np.ndarray) -> np.ndarray:
+        h, w = face_roi.shape[:2]
+        blocks = self.pixelate_blocks
+        block_h = max(1, h // blocks)
+        block_w = max(1, w // blocks)
+        
+        for y in range(0, h, block_h):
+            for x in range(0, w, block_w):
+                y_end = min(y + block_h, h)
+                x_end = min(x + block_w, w)
+                block = face_roi[y:y_end, x:x_end]
+                avg_color = np.mean(block, axis=(0, 1))
+                face_roi[y:y_end, x:x_end] = avg_color
+        
+        return face_roi
+    
+    def _apply_gaussian_blur(self, face_roi: np.ndarray) -> np.ndarray:
+        return cv2.GaussianBlur(face_roi, (self.blur_level, self.blur_level), 0)
+    
     def anonymize_frame(
         self,
         frame: np.ndarray,
@@ -135,8 +154,13 @@ class PrivacyFilter:
             
             face_roi = anonymized[y1:y2, x1:x2]
             
-            # Solid blur - completely replaces with average color
-            blurred = self._apply_solid_blur(face_roi)
+            # Apply blur based on method setting
+            if self.blur_method == "pixelate":
+                blurred = self._apply_pixelate(face_roi)
+            elif self.blur_method == "gaussian":
+                blurred = self._apply_gaussian_blur(face_roi)
+            else:
+                blurred = self._apply_solid_blur(face_roi)
             
             anonymized[y1:y2, x1:x2] = blurred
         

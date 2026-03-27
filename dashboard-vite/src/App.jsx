@@ -19,11 +19,14 @@ function App() {
   const [roomStatus, setRoomStatus] = useState('secure')
   const [processingTime, setProcessingTime] = useState(0)
   
-  const [wasteDetected, setWasteDetected] = useState(0)
   const [demoMode, setDemoMode] = useState(false)
-  
   const [privacyEnabled, setPrivacyEnabled] = useState(true)
   const [showRaw, setShowRaw] = useState(false)
+  
+  const [alertEvents, setAlertEvents] = useState([])
+  const [alertStatus, setAlertStatus] = useState({})
+  const [wasteDuration, setWasteDuration] = useState(0)
+  const [energyMetrics, setEnergyMetrics] = useState({})
   
   const wsRef = useRef(null)
   const fpsCounter = useRef({ count: 0, lastTime: Date.now() })
@@ -44,6 +47,38 @@ function App() {
       if (demoInterval.current) clearInterval(demoInterval.current)
     }
   }, [])
+
+  // Fetch alert and energy status periodically
+  useEffect(() => {
+    if (!connected) return
+    
+    const fetchAlertData = async () => {
+      try {
+        const [statusRes, eventsRes, metricsRes] = await Promise.all([
+          fetch(`${API_URL}/api/alerts/status`),
+          fetch(`${API_URL}/api/alerts/events?limit=5`),
+          fetch(`${API_URL}/api/energy/metrics`)
+        ])
+        
+        const statusData = await statusRes.json()
+        setAlertStatus(statusData)
+        
+        if (statusData.rooms && statusData.rooms['room-101']) {
+          setWasteDuration(statusData.rooms['room-101'].waste_duration_seconds || 0)
+        }
+        
+        const eventsData = await eventsRes.json()
+        setAlertEvents(eventsData.events || [])
+        
+        const metricsData = await metricsRes.json()
+        setEnergyMetrics(metricsData.rooms?.['room-101'] || {})
+      } catch (err) {}
+    }
+    
+    fetchAlertData()
+    const interval = setInterval(fetchAlertData, 5000)
+    return () => clearInterval(interval)
+  }, [connected])
 
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600)
@@ -98,10 +133,6 @@ function App() {
           const isWaste = data.person_count === 0 && (data.light_status === 'ON' || data.fan_status === 'ON')
           setRoomStatus(isWaste ? 'waste' : 'secure')
           
-          if (isWaste) {
-            setWasteDetected(prev => prev + 1)
-          }
-          
           fpsCounter.current.count++
           const now = Date.now()
           if (now - fpsCounter.current.lastTime >= 1000) {
@@ -141,11 +172,10 @@ function App() {
       setLightStatus('ON')
       setFanStatus('ON')
       setRoomStatus('waste')
-      setWasteDetected(prev => prev + 1)
     } else {
-      setPersonCount(Math.floor(Math.random() * 15) + 1)
-      setLightStatus(Math.random() > 0.3 ? 'ON' : 'OFF')
-      setFanStatus(Math.random() > 0.5 ? 'ON' : 'OFF')
+      setPersonCount(Math.floor(Math.random() * 5) + 1)
+      setLightStatus('OFF')
+      setFanStatus('ON')
       setRoomStatus('secure')
     }
     
@@ -156,46 +186,60 @@ function App() {
         setFanStatus('ON')
         setRoomStatus('waste')
       } else {
-        setPersonCount(Math.floor(Math.random() * 15) + 1)
-        setLightStatus(Math.random() > 0.3 ? 'ON' : 'OFF')
-        setFanStatus(Math.random() > 0.5 ? 'ON' : 'OFF')
+        setPersonCount(Math.floor(Math.random() * 5) + 1)
+        setLightStatus('OFF')
+        setFanStatus('ON')
         setRoomStatus('secure')
       }
-      setFps(Math.floor(Math.random() * 5) + 10)
-      setProcessingTime(Math.floor(Math.random() * 500) + 100)
+      setFps(Math.floor(Math.random() * 5) + 25)
+      setProcessingTime(Math.floor(Math.random() * 100) + 50)
     }, 1500)
   }
 
   const stopDemo = () => {
     if (demoInterval.current) clearInterval(demoInterval.current)
     setDemoMode(false)
+    setPersonCount(0)
+    setLightStatus('OFF')
+    setFanStatus('OFF')
+    setRoomStatus('secure')
   }
 
-  const isEnergyWaste = personCount === 0 && (lightStatus === 'ON' || fanStatus === 'ON')
+  const isEnergyWaste = roomStatus === 'waste'
   
-  const estimatedWatts = (lightStatus === 'ON' ? 60 : 0) + (fanStatus === 'ON' ? 75 : 0)
-  const costPerHour = estimatedWatts / 1000 * 0.12
-  const potentialSavings = roomStatus === 'waste' ? costPerHour : 0
+  // Use real data from API when connected, fallback to simplified calculation
+  const estimatedWatts = connected && energyMetrics.estimated_watts 
+    ? energyMetrics.estimated_watts 
+    : (lightStatus === 'ON' ? 40 : 0) + (fanStatus === 'ON' ? 65 : 0)
+    
+  const costPerHour = connected && energyMetrics.cost_per_hour 
+    ? energyMetrics.cost_per_hour 
+    : estimatedWatts / 1000 * 0.12
+    
+  const cumulativeCost = connected && energyMetrics.cumulative_cost ? energyMetrics.cumulative_cost : 0
+  const potentialSavings = connected && energyMetrics.potential_savings_per_hour 
+    ? energyMetrics.potential_savings_per_hour 
+    : (roomStatus === 'waste' ? costPerHour : 0)
 
   return (
     <div className="dashboard">
       <header className="header">
         <div className="header-left">
-          <h1>⚡ WattWatch</h1>
-          <p>Facility Manager Control Room</p>
+          <h1>⚡ CAM SENSE</h1>
+          <p>INTEL MONITORING v1.0.4 - PIXEL GRID ACTIVE</p>
         </div>
         <div className="header-right">
           <div className="metric-box">
-            <span className="metric-label">Running Time</span>
+            <span className="metric-label">UPTIME</span>
             <span className="metric-value">{formatTime(runningTime)}</span>
           </div>
           <div className="metric-box">
-            <span className="metric-label">FPS</span>
+            <span className="metric-label">STREAM_FPS</span>
             <span className="metric-value">{fps}</span>
           </div>
           <div className="metric-box">
-            <span className="metric-label">Latency</span>
-            <span className="metric-value">{processingTime > 0 ? `${processingTime.toFixed(0)}ms` : '--'}</span>
+            <span className="metric-label">NET_LATENCY</span>
+            <span className="metric-value">{processingTime > 0 ? `${processingTime.toFixed(0)}MS` : '---'}</span>
           </div>
         </div>
       </header>
@@ -204,17 +248,17 @@ function App() {
         <div className="camera-config">
           <input
             type="text"
-            placeholder="IP Camera URL (e.g., http://192.168.1.100:8080/video)"
+            placeholder="VID_SOURCE_URL (HTTP/RTSP)"
             value={cameraUrl}
             onChange={(e) => setCameraUrl(e.target.value)}
             disabled={connected}
           />
           {!connected ? (
             <button className="btn btn-connect" onClick={connect} disabled={connecting}>
-              {connecting ? 'Connecting...' : 'Connect Camera'}
+              {connecting ? 'INITIALIZING...' : '> CON_CAMERA'}
             </button>
           ) : (
-            <button className="btn btn-disconnect" onClick={disconnect}>Disconnect</button>
+            <button className="btn btn-disconnect" onClick={disconnect}>X DISCONNECT</button>
           )}
         </div>
         
@@ -229,18 +273,12 @@ function App() {
                     const enabled = e.target.checked
                     setPrivacyEnabled(enabled)
                     try {
-                      await fetch(`${API_URL}/api/privacy/toggle`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(enabled)
-                      })
-                    } catch (err) {
-                      console.error('Failed to toggle privacy:', err)
-                    }
+                      await fetch(`${API_URL}/api/privacy/toggle?enabled=${enabled}`, { method: 'POST' })
+                    } catch (err) {}
                   }}
                 />
                 <span className="toggle-switch"></span>
-                <span>🔒 Privacy Mode {privacyEnabled ? 'ON' : 'OFF'}</span>
+                <span>GHOST_MODE: {privacyEnabled ? 'ACTIVE' : 'OFF'}</span>
               </label>
               {privacyEnabled && (
                 <label className="toggle-label">
@@ -249,20 +287,20 @@ function App() {
                     checked={showRaw}
                     onChange={(e) => setShowRaw(e.target.checked)}
                   />
-                  <span>Show Raw</span>
+                  <span>SHOW_RAW</span>
                 </label>
               )}
             </div>
           )}
           <button className="btn btn-demo" onClick={() => startDemo('empty-room-appliances-on')}>
-            ▶ Demo: Empty + Appliances ON
+            [ DEMO: WASTE ]
           </button>
           <button className="btn btn-demo" onClick={() => startDemo('occupied-normal')}>
-            ▶ Demo: Normal Occupancy
+            [ DEMO: NORMAL ]
           </button>
           {demoMode && (
             <button className="btn btn-stop" onClick={stopDemo}>
-              ⏹ Stop Demo
+              TERMINATE_DEMO
             </button>
           )}
         </div>
@@ -276,99 +314,106 @@ function App() {
                 <img 
                   id="video-frame" 
                   src={showRaw && rawFrame ? rawFrame : frame} 
-                  alt="Live Feed" 
+                  alt="Live Pixel Feed" 
                 />
                 {privacyEnabled && !showRaw && (
-                  <div className="privacy-badge">🔒 Anonymized</div>
+                  <div className="privacy-badge">PRIVACY PROTECTION ENABLED</div>
                 )}
                 {showRaw && (
-                  <div className="raw-badge">⚠️ Raw Feed</div>
+                  <div className="raw-badge">RAW VIDEO FEED EXPOSED</div>
                 )}
               </div>
             ) : (
               <div className="no-feed">
-                <div className="no-feed-icon">📹</div>
-                <p>Connect to camera or start demo</p>
-                <p className="no-feed-hint">Use IP Webcam app on your phone</p>
+                <div className="no-feed-icon">00101</div>
+                <p>WAITING FOR SOURCE...</p>
+                <p className="no-feed-hint">Ready for input stream.</p>
               </div>
             )}
           </div>
           
           <div className="status-banner">
             <div className={`status-indicator ${roomStatus}`}>
-              {roomStatus === 'waste' ? '⚠️ ENERGY WASTE DETECTED' : '✓ SECURE - NORMAL'}
+              {roomStatus === 'waste' ? '!!! ENERGY WASTE DETECTED !!!' : 'SYSTEM SECURE - ALL CLEAR'}
             </div>
             {isEnergyWaste && (
               <div className="waste-alert">
-                Room is empty but appliances are ON! Potential savings: ${potentialSavings.toFixed(2)}/hr
+                Anomalous power usage in empty zone. Est. Savings: ${potentialSavings.toFixed(2)}/hr
               </div>
             )}
           </div>
         </div>
 
         <div className="metrics-section">
-          <div className="panel-card main-status">
-            <h3>📊 Current Status</h3>
+          <div className="panel-card">
+            <h3>OBJECT_LOG / ROOM_101</h3>
             <div className="status-grid">
               <div className="status-item">
-                <span className="status-label">👥 Person Count</span>
-                <span className="status-value large">{personCount}</span>
+                <span className="status-label">OCCUPANTS</span>
+                <span className="status-value large">{personCount.toString().padStart(2, '0')}</span>
               </div>
               <div className="status-item">
-                <span className="status-label">💡 Light</span>
+                <span className="status-label">LUMINANCE</span>
                 <span className={`status-value ${lightStatus === 'ON' ? 'on' : 'off'}`}>{lightStatus}</span>
               </div>
               <div className="status-item">
-                <span className="status-label">🌀 Ceiling Fan</span>
+                <span className="status-label">VENTILATION</span>
                 <span className={`status-value ${fanStatus === 'ON' ? 'on' : 'off'}`}>{fanStatus}</span>
               </div>
               <div className="status-item">
-                <span className="status-label">📈 Room Status</span>
-                <span className={`status-value ${roomStatus}`}>{roomStatus.toUpperCase()}</span>
+                <span className="status-label">THREAT_LEVEL</span>
+                <span className={`status-value ${roomStatus}`}>{roomStatus === 'waste' ? 'CRITICAL' : 'ZERO'}</span>
               </div>
             </div>
           </div>
 
-          <div className="panel-card energy-metrics">
-            <h3>⚡ Energy Metrics</h3>
+          <div className="panel-card">
+            <h3>ENERGY_CONSUMPTION_DATA</h3>
             <div className="energy-grid">
               <div className="energy-item">
-                <span className="energy-label">Estimated Power</span>
+                <span className="energy-label">LOAD_WATTS</span>
                 <span className="energy-value">{estimatedWatts}W</span>
               </div>
               <div className="energy-item">
-                <span className="energy-label">Cost/Hour</span>
+                <span className="energy-label">RATE_USD/H</span>
                 <span className="energy-value">${costPerHour.toFixed(2)}</span>
               </div>
-              <div className="energy-item">
-                <span className="energy-label">Waste Events</span>
-                <span className="energy-value warning">{wasteDetected}</span>
-              </div>
               <div className="energy-item highlight">
-                <span className="energy-label">Potential Savings</span>
-                <span className="energy-value">${potentialSavings.toFixed(2)}/hr</span>
+                <span className="energy-label">TOTAL_CUMULATIVE_WASTE</span>
+                <span className="energy-value">${cumulativeCost.toFixed(4)}</span>
+              </div>
+              <div className="energy-item">
+                <span className="energy-label">WASTE_TIMER</span>
+                <span className="energy-value">{Math.floor(wasteDuration / 60)}M {Math.floor(wasteDuration % 60)}S</span>
               </div>
             </div>
           </div>
 
-          <div className="panel-card system-info">
-            <h3>💻 System Info</h3>
-            <div className="info-grid">
-              <div className="info-item">
-                <span className="info-label">Camera</span>
-                <span className="info-value">{connected ? 'Connected' : 'Disconnected'}</span>
+          {alertEvents.length > 0 && (
+            <div className="panel-card alert-panel">
+              <h3>SYSTEM_ALERTS_HISTORY</h3>
+              <div className="alert-events">
+                {alertEvents.map((event, i) => (
+                  <div key={i} className="alert-event">
+                    <span className="event-time">[{new Date(event.timestamp * 1000).toLocaleTimeString([], {hour12: false})}]</span>
+                    <span className="event-room">{event.room_name}</span>
+                    <span className="event-duration">{Math.floor(event.duration_seconds)}S WASTE</span>
+                  </div>
+                ))}
               </div>
-              <div className="info-item">
-                <span className="info-label">Mode</span>
-                <span className="info-value">{demoMode ? 'DEMO' : 'LIVE'}</span>
+            </div>
+          )}
+
+          <div className="panel-card">
+            <h3>CORE_SPECS</h3>
+            <div className="status-grid">
+              <div className="status-item">
+                <span className="status-label">STATUS</span>
+                <span className="status-value" style={{fontSize: '0.9rem', color: connected ? '#00ff9d' : '#94a3b8'}}>{connected ? 'ONLINE' : 'OFFLINE'}</span>
               </div>
-              <div className="info-item">
-                <span className="info-label">Processing</span>
-                <span className="info-value">{processingTime > 0 ? `${processingTime.toFixed(0)}ms` : '--'}</span>
-              </div>
-              <div className="info-item">
-                <span className="info-label">Latency Target</span>
-                <span className="info-value success">&lt; 3s ✓</span>
+              <div className="status-item">
+                <span className="status-label">MODE</span>
+                <span className="status-value" style={{fontSize: '0.9rem'}}>{demoMode ? 'TEST' : 'LIVE'}</span>
               </div>
             </div>
           </div>
