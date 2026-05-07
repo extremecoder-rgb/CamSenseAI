@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import time
 import json
+import datetime
+import yaml
 
 # Add project root to sys.path
 root_dir = str(Path(__file__).resolve().parent.parent)
@@ -32,6 +34,7 @@ import uuid
 # Import enums from src so comparisons work correctly
 from src.appliance_status import ApplianceType, Status
 from src.database import get_database
+from src.mqtt_manager import MQTTManager
 
 
 @dataclass
@@ -186,6 +189,12 @@ class MultiRoomDetector:
         self._appliance_frame_event = threading.Event()
         self._lock = threading.Lock()
         self._appliance_thread = None
+        
+        # MQTT Automation
+        self.mqtt_mgr = MQTTManager()
+        self.mqtt_mgr.connect()
+        self._room_buffers = {} # room_id -> int (consecutive empty frames)
+        self._buffer_threshold = 30 # ~1 second at 30fps
         
         # Microzone intelligence
         from src.microzone import MicrozoneTracker
@@ -436,6 +445,22 @@ class MultiRoomDetector:
                     )
             except Exception as dbe:
                 print(f"[DB Error] process_frame buffer_detection: {dbe}")
+
+        # --- MQTT Automation Logic ---
+        if room_id not in self._room_buffers:
+            self._room_buffers[room_id] = 0
+            
+        if person_count > 0:
+            # Person detected -> Trigger ON immediately
+            self._room_buffers[room_id] = 0
+            self.mqtt_mgr.publish_control(room_id, "TURN_ON")
+        else:
+            # No person -> Increment buffer
+            self._room_buffers[room_id] += 1
+            if self._room_buffers[room_id] >= self._buffer_threshold:
+                # Buffer full -> Trigger OFF
+                self.mqtt_mgr.publish_control(room_id, "TURN_OFF")
+        # -----------------------------
 
         processing_time = (time.time() - start_time) * 1000
 
@@ -1096,6 +1121,7 @@ async def websocket_stream(websocket: WebSocket, room_id: str):
                 "privacy_enabled": detector.privacy_enabled if detector else False,
                 "frame": f"data:image/jpeg;base64,{frame_base64}",
                 "raw_frame": f"data:image/jpeg;base64,{raw_frame_base64}" if raw_frame_base64 else None,
+                "avg_brightness": float(avg_brightness) if 'avg_brightness' in locals() else 0,
                 "microzone": microzone_data,
             }
 
@@ -1407,7 +1433,6 @@ async def verify_privacy():
 @app.get("/api/energy/summary")
 async def energy_summary(room_id: str = None, days: int = 7):
     """Get energy savings summary for the specified period."""
-    import datetime
     
     db = None
     try:
@@ -1540,7 +1565,6 @@ async def get_energy_dashboard():
     Get comprehensive energy dashboard with kWh/day, INR/year, and CO2 estimates.
     One-slide summary for stakeholders.
     """
-    import datetime
     
     db = None
     try:
@@ -1699,7 +1723,6 @@ async def get_privacy_assurance():
     Get privacy assurance information for stakeholders.
     One-slide summary of privacy measures and compliance.
     """
-    import yaml
     
     privacy_info = {
         "enabled": True,
@@ -1763,11 +1786,28 @@ async def get_privacy_assurance():
     
     return privacy_info
 
+@app.get("/api/database/rows/{table_name}")
+async def get_database_rows(table_name: str, limit: int = 50):
+    """Fetch actual data rows from the local database."""
+    valid_tables = ["waste_events", "detection_counts", "energy_savings", "privacy_settings"]
+    if table_name not in valid_tables: return {"error": "Invalid table"}
+    db = None
+    try:
+        import sqlite3
+        db = sqlite3.connect(database_path)
+        db.row_factory = sqlite3.Row
+        cursor = db.cursor()
+        cursor.execute(f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT ?", (limit,))
+        return {"rows": [dict(r) for r in cursor.fetchall()]}
+    except Exception as e: return {"error": str(e)}
+    finally:
+        if db: db.close()
 
 @app.get("/api/calibration")
 async def get_calibration():
     """Get intensity calibration settings for all rooms."""
-    import yaml
+
+
     
     config_path = "config.yaml"
     if not os.path.exists(config_path):
@@ -1831,7 +1871,6 @@ class CalibrationUpdate(BaseModel):
 @app.post("/api/calibration")
 async def update_calibration(update: CalibrationUpdate):
     """Update intensity calibration thresholds for a room."""
-    import yaml
     
     config_path = "config.yaml"
     if not os.path.exists(config_path):

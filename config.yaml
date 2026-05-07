@@ -34,9 +34,7 @@ appliance:
     ceiling_fan: 65
     monitor: 35
   electricity_rate: 0.12
-  # Indian Rupee rate (₹/kWh) - for local stakeholders
-  electricity_rate_inr: 6.50
-  # CO2 emissions factor (kg CO2 per kWh) - India's grid average
+  electricity_rate_inr: 6.5
   co2_factor_kg_per_kwh: 0.71
   roboflow:
     api_key: p3oHA7T2HAO4pgy61Vae
@@ -110,6 +108,14 @@ intensity_calibration:
         medium_threshold: 90
       last_calibrated: '2026-03-28T00:15:08.446305'
       sample_count: 0
+    room-101:
+      day:
+        dark_threshold: 80
+        medium_threshold: 160
+      night:
+        dark_threshold: 40
+        medium_threshold: 100
+      last_calibrated: manual
   auto_calibrate:
     enabled: true
     sample_frames: 30

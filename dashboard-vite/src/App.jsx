@@ -18,6 +18,7 @@ function useRoom(roomId, defaultUrl) {
   const [monitorStatus, setMonitorStatus] = useState('OFF')
   const [roomStatus, setRoomStatus] = useState('secure')
   const [processingTime, setProcessingTime] = useState(0)
+  const [avgBrightness, setAvgBrightness] = useState(0)
   
   const [microzoneData, setMicrozoneData] = useState(null)
   
@@ -54,6 +55,7 @@ function useRoom(roomId, defaultUrl) {
             const realLatency = Math.max(0, now - serverTime)
             setProcessingTime(realLatency)
           }
+          if (data.avg_brightness !== undefined) setAvgBrightness(data.avg_brightness)
           if (data.microzone) setMicrozoneData(data.microzone)
           
           const isWaste = data.person_count === 0 && (data.light_status === 'ON' || data.fan_status === 'ON' || data.monitor_status === 'ON')
@@ -94,8 +96,175 @@ function useRoom(roomId, defaultUrl) {
   return {
     roomId, url, setUrl, connected, connecting, fps, frame, rawFrame,
     personCount, lightStatus, fanStatus, monitorStatus, roomStatus, setRoomStatus, 
-    processingTime, microzoneData, connect, disconnect
+    processingTime, avgBrightness, microzoneData, connect, disconnect
   }
+}
+
+
+function CalibrationStudio({ room1, room2, calibrationData, onUpdate, onRefresh, loading }) {
+  const [selectedRoomId, setSelectedRoomId] = useState('room-101')
+  const [mode, setMode] = useState('day') // 'day' or 'night'
+  
+  const currentRoom = selectedRoomId === 'room-101' ? room1 : room2
+  const roomCalib = (calibrationData.rooms || {})[selectedRoomId] || {}
+  
+  const [dark, setDark] = useState(80)
+  const [medium, setMedium] = useState(160)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    const data = mode === 'day' ? roomCalib.day : roomCalib.night
+    setDark(data?.dark_threshold || (mode === 'day' ? 80 : 40))
+    setMedium(data?.medium_threshold || (mode === 'day' ? 160 : 100))
+  }, [roomCalib, mode])
+
+  const handleSave = () => {
+    const dDark = mode === 'day' ? dark : (roomCalib.day?.dark_threshold || 80)
+    const dMed = mode === 'day' ? medium : (roomCalib.day?.medium_threshold || 160)
+    const nDark = mode === 'night' ? dark : (roomCalib.night?.dark_threshold || 40)
+    const nMed = mode === 'night' ? medium : (roomCalib.night?.medium_threshold || 100)
+    
+    onUpdate(selectedRoomId, dDark, dMed, nDark, nMed)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const luminancePercent = (currentRoom.avgBrightness / 255) * 100
+
+  return (
+    <div className="calib-studio">
+      <div className="calib-preview-panel">
+        <header>
+          <h2 className="studio-title">LUMINANCE_STUDIO_V1</h2>
+          <p className="studio-subtitle">REAL_TIME_THRESHOLD_CALIBRATION // {selectedRoomId.toUpperCase()}</p>
+        </header>
+
+        <div className="video-container" style={{ flex: 1, maxHeight: '60%' }}>
+          <div className="video-header">
+            <span className="v-tag">LIVE_FEED // CALIBRATION_REFERENCE</span>
+            <span className="v-alert secure">LUM: {currentRoom.avgBrightness?.toFixed(1)}</span>
+          </div>
+          <div className="video-frame">
+            {currentRoom.frame ? (
+              <img src={currentRoom.frame} alt="Calibration feed" className="pixel-stream" />
+            ) : (
+              <div className="placeholder">CONNECT CAMERA TO VIEW LIVE LUMINANCE</div>
+            )}
+            <div className="scanline" />
+          </div>
+        </div>
+
+        <div className="glass-card">
+          <h4 className="card-title">◈ LIVE_LUMINANCE_METER</h4>
+          <div style={{ padding: '20px 0 10px 0' }}>
+            <div className="meter-strip">
+              <div className="meter-fill" style={{ width: `${luminancePercent}%` }} />
+              <div className="meter-cursor" style={{ left: `${luminancePercent}%` }} />
+              
+              {/* Threshold Markers */}
+              <div className="threshold-marker dark" style={{ left: `${(dark/255)*100}%` }}>
+                <span className="threshold-label" style={{ color: '#f87171' }}>DARK_{dark}</span>
+              </div>
+              <div className="threshold-marker medium" style={{ left: `${(medium/255)*100}%` }}>
+                <span className="threshold-label" style={{ color: '#60a5fa' }}>MED_{medium}</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', opacity: 0.5, marginTop: '5px' }}>
+            <span>0 (TOTAL_DARK)</span>
+            <span>128</span>
+            <span>255 (BLINDING)</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="sidebar-right" style={{ background: 'transparent', border: 'none', padding: 0 }}>
+        <div className="calib-controls-scroll">
+          <section className="glass-card">
+            <h4 className="card-title">◈ SELECT_ROOM</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <button 
+                className={`btn ${selectedRoomId === 'room-101' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setSelectedRoomId('room-101')}
+              >
+                ROOM_101
+              </button>
+              <button 
+                className={`btn ${selectedRoomId === 'room-102' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setSelectedRoomId('room-102')}
+              >
+                ROOM_102
+              </button>
+            </div>
+          </section>
+
+          <section className="glass-card">
+            <h4 className="card-title">◈ CALIBRATION_MODE</h4>
+            <div className="mode-selector">
+              <button className={`mode-btn ${mode === 'day' ? 'active' : ''}`} onClick={() => setMode('day')}>DAY_SET</button>
+              <button className={`mode-btn ${mode === 'night' ? 'active' : ''}`} onClick={() => setMode('night')}>NIGHT_SET</button>
+            </div>
+            
+            <div className="range-wrap">
+              <div className="range-header">
+                <span className="l">DARK_THRESHOLD</span>
+                <span className="v">{dark}</span>
+              </div>
+              <input 
+                type="range" className="custom-slider" 
+                min="0" max="255" value={dark} 
+                onChange={(e) => setDark(parseInt(e.target.value))} 
+              />
+            </div>
+
+            <div className="range-wrap">
+              <div className="range-header">
+                <span className="l">MEDIUM_THRESHOLD</span>
+                <span className="v">{medium}</span>
+              </div>
+              <input 
+                type="range" className="custom-slider" 
+                min="0" max="255" value={medium} 
+                onChange={(e) => setMedium(parseInt(e.target.value))} 
+              />
+            </div>
+
+            <button 
+              className={`btn ${saved ? 'btn-primary' : 'btn-danger'}`} 
+              onClick={handleSave}
+              style={{ background: saved ? '' : '#ff003c', color: '#fff' }}
+            >
+              {saved ? 'SETTINGS_APPLIED' : 'COMMIT_CHANGES'}
+            </button>
+          </section>
+
+          <section className="glass-card">
+            <h4 className="card-title">◈ SYSTEM_STATUS</h4>
+            <div style={{ fontSize: '11px', lineHeight: '1.8' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ opacity: 0.6 }}>Current Lum:</span>
+                <span style={{ color: 'var(--accent-neon)' }}>{currentRoom.avgBrightness?.toFixed(1)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ opacity: 0.6 }}>Classification:</span>
+                <span style={{ color: currentRoom.avgBrightness < dark ? '#f87171' : currentRoom.avgBrightness < medium ? '#60a5fa' : '#4ade80' }}>
+                  {currentRoom.avgBrightness < dark ? 'DARK' : currentRoom.avgBrightness < medium ? 'MEDIUM' : 'BRIGHT'}
+                </span>
+              </div>
+              <button 
+                className="btn btn-outline" 
+                onClick={onRefresh} 
+                style={{ marginTop: '12px', fontSize: '9px' }}
+                disabled={loading}
+              >
+                {loading ? 'RE-SYNCING...' : 'SYNC_FROM_HARDWARE'}
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 
@@ -106,6 +275,11 @@ function App() {
   const [calibrationLoading, setCalibrationLoading] = useState(false)
   const [energyDashboard, setEnergyDashboard] = useState({})
   const [privacyAssurance, setPrivacyAssurance] = useState({})
+  const [dbInfo, setDbInfo] = useState({})
+  const [dbSchema, setDbSchema] = useState({ tables: [] })
+  const [browsedTable, setBrowsedTable] = useState(null)
+  const [browsedRows, setBrowsedRows] = useState([])
+  const [browsing, setBrowsing] = useState(false)
   
   const room1 = useRoom('room-101', 'http://192.168.0.154:8080/video')
   const room2 = useRoom('room-102', 'http://192.168.0.155:8080/video')
@@ -136,6 +310,9 @@ function App() {
     if (activeTab === 'privacy') {
       fetchPrivacyAssurance()
     }
+    if (activeTab === 'database') {
+      fetchDatabaseData()
+    }
   }, [activeTab])
 
   const fetchEnergyDashboard = async () => {
@@ -155,6 +332,35 @@ function App() {
       setPrivacyAssurance(data)
     } catch (err) {
       console.error('Failed to fetch privacy assurance:', err)
+    }
+  }
+
+  const fetchDatabaseData = async () => {
+    try {
+      const [infoRes, schemaRes] = await Promise.all([
+        fetch(`${API_URL}/api/database/info`),
+        fetch(`${API_URL}/api/database/schema`)
+      ])
+      const info = await infoRes.json()
+      const schema = await schemaRes.json()
+      setDbInfo(info)
+      setDbSchema(schema)
+    } catch (err) {
+      console.error('Failed to fetch database data:', err)
+    }
+  }
+
+  const fetchDatabaseRows = async (tableName) => {
+    setBrowsing(true)
+    setBrowsedTable(tableName)
+    try {
+      const res = await fetch(`${API_URL}/api/database/rows/${tableName}`)
+      const data = await res.json()
+      setBrowsedRows(data.rows || [])
+    } catch (err) {
+      console.error('Failed to browse table:', err)
+    } finally {
+      setBrowsing(false)
     }
   }
 
@@ -383,83 +589,14 @@ function App() {
       )}
 
       {activeTab === 'calibration' && (
-        <div className="dashboard-grid">
-          <aside className="sidebar-left">
-            <section className="ctrl-group">
-              <h4 className="section-title">INTENSITY_CALIBRATION</h4>
-              <p style={{ fontSize: '11px', opacity: 0.7, marginBottom: '12px' }}>
-                Adjust brightness thresholds per room for accurate occupancy detection.
-              </p>
-              <button className="btn btn-primary" onClick={fetchCalibration} style={{ width: '100%' }}>
-                REFRESH
-              </button>
-            </section>
-          </aside>
-
-          <main className="main-viewport">
-            {calibrationLoading ? (
-              <div style={{ padding: '40px', textAlign: 'center' }}>Loading calibration data...</div>
-            ) : (
-              <div style={{ padding: '20px' }}>
-                <div className="glass-card">
-                  <h4 className="card-title">◈ GLOBAL_SETTINGS</h4>
-                  <div style={{ display: 'flex', gap: '20px', marginBottom: '16px' }}>
-                    <div>
-                      <span className="l">DAY_START</span>
-                      <span className="v">{calibrationData.day_start_hour || 6}:00</span>
-                    </div>
-                    <div>
-                      <span className="l">DAY_END</span>
-                      <span className="v">{calibrationData.day_end_hour || 18}:00</span>
-                    </div>
-                    <div>
-                      <span className="l">STATUS</span>
-                      <span className={`v ${calibrationData.enabled ? 'on' : ''}`}>
-                        {calibrationData.enabled ? 'ENABLED' : 'DISABLED'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ marginTop: '16px' }}>
-                  <h4 className="section-title" style={{ marginBottom: '12px' }}>◈ ROOM_THRESHOLDS</h4>
-                  {Object.keys(calibrationData.rooms || {}).length > 0 ? (
-                    Object.entries(calibrationData.rooms).map(([roomId, calib]) => (
-                      <CalibrationCard
-                        key={roomId}
-                        roomId={roomId}
-                        calib={calib}
-                        onUpdate={updateCalibration}
-                      />
-                    ))
-                  ) : (
-                    <div className="glass-card">
-                      <p style={{ textAlign: 'center', opacity: 0.6 }}>
-                        No room calibrations configured.<br />
-                        Run: python main.py calibrate video.mp4 --room [ROOM_ID]
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </main>
-
-          <aside className="sidebar-right">
-            <div className="glass-card">
-              <h4 className="card-title">◈ HELP</h4>
-              <div style={{ fontSize: '11px', lineHeight: '1.6' }}>
-                <p><strong>Dark Threshold:</strong> Below this = empty/low activity</p>
-                <p><strong>Medium Threshold:</strong> Below this = normal activity</p>
-                <p><strong>Above Medium:</strong> High brightness (occupied)</p>
-                <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '12px 0' }} />
-                <p style={{ opacity: 0.7 }}>
-                  Tip: Use CLI to auto-calibrate from sample videos, then fine-tune here.
-                </p>
-              </div>
-            </div>
-          </aside>
-        </div>
+        <CalibrationStudio 
+          room1={room1} 
+          room2={room2} 
+          calibrationData={calibrationData} 
+          onUpdate={updateCalibration}
+          onRefresh={fetchCalibration}
+          loading={calibrationLoading}
+        />
       )}
 
       {activeTab === 'dashboard' && (
@@ -639,93 +776,143 @@ function App() {
           </aside>
         </div>
       )}
-    </div>
-  )
-}
+      {activeTab === 'database' && (
+        <div className="dashboard-grid">
+          <aside className="sidebar-left">
+            <section className="ctrl-group">
+              <h4 className="section-title">DATABASE_EXPLORER</h4>
+              <button 
+                className={`btn ${!browsedTable ? 'btn-primary' : 'btn-outline'}`} 
+                onClick={() => {setBrowsedTable(null); fetchDatabaseData()}}
+                style={{ width: '100%', marginBottom: '8px' }}
+              >
+                SCHEMA_VIEW
+              </button>
+              <p style={{ fontSize: '10px', opacity: 0.6 }}>SELECT_TABLE_TO_BROWSE:</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+                {(dbSchema.tables || []).map(t => (
+                  <button 
+                    key={t.name}
+                    className={`btn ${browsedTable === t.name ? 'btn-primary' : 'btn-outline'}`}
+                    onClick={() => fetchDatabaseRows(t.name)}
+                    style={{ fontSize: '9px', textAlign: 'left', padding: '8px' }}
+                  >
+                    {t.name.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </section>
+          </aside>
 
-function CalibrationCard({ roomId, calib, onUpdate }) {
-  const [dayDark, setDayDark] = useState(calib?.day?.dark_threshold || 80)
-  const [dayMedium, setDayMedium] = useState(calib?.day?.medium_threshold || 160)
-  const [nightDark, setNightDark] = useState(calib?.night?.dark_threshold || 40)
-  const [nightMedium, setNightMedium] = useState(calib?.night?.medium_threshold || 100)
-  const [saved, setSaved] = useState(false)
+          <main className="main-viewport">
+            {!browsedTable ? (
+              /* Schema View */
+              <div style={{ padding: '20px' }}>
+                <div className="glass-card" style={{ borderLeft: '3px solid var(--accent-neon)' }}>
+                  <h4 className="card-title">◈ ACTIVE_STORAGE_LOCATION</h4>
+                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '4px', fontFamily: 'monospace', fontSize: '11px', color: 'var(--accent-neon)' }}>
+                    {dbInfo.db_path || 'data/wattwatch.db'}
+                  </div>
+                </div>
 
-  useEffect(() => {
-    setDayDark(calib?.day?.dark_threshold || 80)
-    setDayMedium(calib?.day?.medium_threshold || 160)
-    setNightDark(calib?.night?.dark_threshold || 40)
-    setNightMedium(calib?.night?.medium_threshold || 100)
-  }, [calib])
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginTop: '20px' }}>
+                  {Object.entries(dbInfo.tables || {}).map(([name, count]) => (
+                    <div key={name} className="glass-card" style={{ textAlign: 'center', cursor: 'pointer' }} onClick={() => fetchDatabaseRows(name)}>
+                      <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{count}</div>
+                      <div style={{ fontSize: '9px', opacity: 0.5, marginTop: '4px' }}>{name.toUpperCase()}</div>
+                    </div>
+                  ))}
+                </div>
 
-  const handleSave = () => {
-    onUpdate(roomId, dayDark, dayMedium, nightDark, nightMedium)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
+                <div style={{ marginTop: '20px' }}>
+                  <h4 className="section-title">◈ SCHEMA_MAP</h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                    {(dbSchema.tables || []).map((table) => (
+                      <div key={table.name} className="glass-card" style={{ padding: '0' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 12px', fontSize: '10px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>TABLE: {table.name.toUpperCase()}</span>
+                        </div>
+                        <div style={{ padding: '10px' }}>
+                          {table.columns.slice(0, 5).map((col) => (
+                            <div key={col.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', marginBottom: '4px', opacity: 0.8 }}>
+                              <span>{col.name}</span>
+                              <span style={{ opacity: 0.4 }}>{col.type}</span>
+                            </div>
+                          ))}
+                          {table.columns.length > 5 && <div style={{ fontSize: '9px', opacity: 0.3, textAlign: 'center' }}>+ {table.columns.length - 5} MORE</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Data Browser View */
+              <div style={{ padding: '20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                  <h4 className="section-title" style={{ margin: 0 }}>◈ BROWSER // {browsedTable.toUpperCase()}</h4>
+                  <button className="btn btn-outline" style={{ fontSize: '9px' }} onClick={() => fetchDatabaseRows(browsedTable)}>REFRESH_ROWS</button>
+                </div>
 
-  return (
-    <div className="glass-card" style={{ marginBottom: '12px' }}>
-      <h4 className="card-title">◈ {roomId.toUpperCase()}</h4>
-      {calib?.last_calibrated && (
-        <p style={{ fontSize: '10px', opacity: 0.5, marginBottom: '12px' }}>
-          Last updated: {calib.last_calibrated}
-        </p>
+                <div className="glass-card" style={{ flex: 1, padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  {browsing ? (
+                    <div style={{ padding: '40px', textAlign: 'center', opacity: 0.5 }}>FETCHING_RECORDS...</div>
+                  ) : browsedRows.length === 0 ? (
+                    <div style={{ padding: '40px', textAlign: 'center', opacity: 0.5 }}>NO_RECORDS_FOUND</div>
+                  ) : (
+                    <div style={{ overflow: 'auto', flex: 1 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px', textAlign: 'left' }}>
+                        <thead style={{ position: 'sticky', top: 0, background: '#111', zIndex: 10 }}>
+                          <tr>
+                            {Object.keys(browsedRows[0] || {}).map(k => (
+                              <th key={k} style={{ padding: '10px', borderBottom: '1px solid rgba(255,255,255,0.1)', opacity: 0.6 }}>{k.toUpperCase()}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {browsedRows.map((row, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                              {Object.values(row).map((v, j) => (
+                                <td key={j} style={{ padding: '8px 10px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
+                                  {typeof v === 'number' && v > 1000000000 ? new Date(v * 1000).toLocaleTimeString() : String(v)}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </main>
+
+          <aside className="sidebar-right">
+            <div className="glass-card">
+              <h4 className="card-title">◈ DB_HEALTH</h4>
+              <div style={{ fontSize: '11px', lineHeight: '1.8' }}>
+                <p><span style={{ opacity: 0.6 }}>IO_STATUS:</span> <span style={{ color: '#4ade80' }}>OPTIMIZED</span></p>
+                <p><span style={{ opacity: 0.6 }}>JOURNAL:</span> {dbInfo.journal_mode}</p>
+                <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '12px 0' }} />
+                <p style={{ fontSize: '9px', opacity: 0.5 }}>
+                  The browser displays the last 50 entries. Timestamps are automatically converted to local time for readability.
+                </p>
+              </div>
+            </div>
+            {browsedTable && (
+              <div className="glass-card" style={{ marginTop: '15px' }}>
+                <h4 className="card-title">◈ TABLE_INFO</h4>
+                <div style={{ fontSize: '10px', opacity: 0.8 }}>
+                  <p>NAME: {browsedTable}</p>
+                  <p>RECORDS_LOADED: {browsedRows.length}</p>
+                  <button className="btn btn-outline" style={{ width: '100%', marginTop: '10px', fontSize: '9px' }} onClick={() => setBrowsedTable(null)}>CLOSE_BROWSER</button>
+                </div>
+              </div>
+            )}
+          </aside>
+        </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        <div>
-          <p style={{ fontSize: '11px', marginBottom: '8px', color: '#4ade80' }}>DAY THRESHOLDS</p>
-          <div className="input-row" style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '10px', width: '60px' }}>Dark &lt;</span>
-            <input
-              type="number"
-              value={dayDark}
-              onChange={(e) => setDayDark(parseInt(e.target.value) || 0)}
-              min="0" max="255"
-              style={{ width: '60px', padding: '4px' }}
-            />
-          </div>
-          <div className="input-row">
-            <span style={{ fontSize: '10px', width: '60px' }}>Medium &lt;</span>
-            <input
-              type="number"
-              value={dayMedium}
-              onChange={(e) => setDayMedium(parseInt(e.target.value) || 0)}
-              min="0" max="255"
-              style={{ width: '60px', padding: '4px' }}
-            />
-          </div>
-        </div>
-        <div>
-          <p style={{ fontSize: '11px', marginBottom: '8px', color: '#60a5fa' }}>NIGHT THRESHOLDS</p>
-          <div className="input-row" style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '10px', width: '60px' }}>Dark &lt;</span>
-            <input
-              type="number"
-              value={nightDark}
-              onChange={(e) => setNightDark(parseInt(e.target.value) || 0)}
-              min="0" max="255"
-              style={{ width: '60px', padding: '4px' }}
-            />
-          </div>
-          <div className="input-row">
-            <span style={{ fontSize: '10px', width: '60px' }}>Medium &lt;</span>
-            <input
-              type="number"
-              value={nightMedium}
-              onChange={(e) => setNightMedium(parseInt(e.target.value) || 0)}
-              min="0" max="255"
-              style={{ width: '60px', padding: '4px' }}
-            />
-          </div>
-        </div>
-      </div>
-      <button
-        className={`btn ${saved ? 'btn-primary' : 'btn-outline'}`}
-        onClick={handleSave}
-        style={{ marginTop: '12px', width: '100%' }}
-      >
-        {saved ? 'SAVED!' : 'SAVE THRESHOLDS'}
-      </button>
     </div>
   )
 }
